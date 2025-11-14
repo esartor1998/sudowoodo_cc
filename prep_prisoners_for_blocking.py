@@ -37,7 +37,7 @@ if __name__ == "__main__":
 	args = parser.parse_args()
 
 	os.makedirs(args.output_folder, exist_ok=True)
-	cache_location = f'{args.input}_serialized_cached.csv'
+	cache_location = f'{args.input}_serialized_removebin={args.remove_binary}_removemulti={args.remove_multi}_cached.csv'
 	n_splits = 10
 
 	df = pd.read_csv(args.input)
@@ -45,10 +45,11 @@ if __name__ == "__main__":
 	if not os.path.isfile(cache_location):
 		print(f'Generating and cacheing the serialized version of the pairs file {args.input}...')
 		df = binarize_string_binary_col(df, 'is_tattoo')
-		df = df.drop(columns=['match'])
 		df = restring_list_col(df, 'label')
 		df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
-		df = serialize_df_to_df(df, suffix='_right', label_col='is_tattoo', include_labels=False)
+		df = df.drop(columns=['PersonID', 'PersonID_right'])
+		df = serialize_df_to_df(df, suffix='_right', label_col='match', include_labels=False)
+		df['label'] = y
 		df.to_csv(cache_location)
 	else:
 		print(f'Reading cached {cache_location}')
