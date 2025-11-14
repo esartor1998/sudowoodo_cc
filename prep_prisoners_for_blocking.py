@@ -14,15 +14,15 @@ def stratified_kfold_with_val(X, y, n_splits=10, val_size=0.1):
 
 	for train_val_idx, test_idx in outer_kf.split(X, y):
 		y_train_val = np.array(y)[train_val_idx]
-		
+
 		inner_sss = StratifiedShuffleSplit(
 			n_splits=1, test_size=val_size, random_state=random_state
 		)
-		
+
 		train_idx_inner, val_idx_inner = next(
 			inner_sss.split(np.zeros(len(train_val_idx)), y_train_val)
 		)
-		
+
 		train_idx = train_val_idx[train_idx_inner]
 		val_idx   = train_val_idx[val_idx_inner]
 
@@ -45,14 +45,15 @@ if __name__ == "__main__":
 	if not os.path.isfile(cache_location):
 		print(f'Generating and cacheing the serialized version of the pairs file {args.input}...')
 		df = binarize_string_binary_col(df, 'is_tattoo')
+		df = df.drop(columns=['match'])
 		df = restring_list_col(df, 'label')
 		df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
-		df = serialize_df_to_df(df, suffix='_right', label_col='is_tattoo')
+		df = serialize_df_to_df(df, suffix='_right', label_col='is_tattoo', include_labels=False)
 		df.to_csv(cache_location)
 	else:
 		print(f'Reading cached {cache_location}')
 		df = pd.read_csv(cache_location)
-		
+
 	X = np.array(df['text'].values)
 
 	for fold, (train_idx, val_idx, test_idx) in tqdm(enumerate(stratified_kfold_with_val(X, y, n_splits=n_splits)), total=n_splits, desc="Processing folds..."):
@@ -63,13 +64,13 @@ if __name__ == "__main__":
 
 		X_train, X_test, X_valid = X[train_idx], X[test_idx], X[val_idx]
 		y_train, y_test, y_valid = y[train_idx], y[test_idx], y[val_idx]
-		
+
 		# (re)serialize to Ditto format
 		train_str_no_label = '\n'.join(X_train)
 		train_str = '\n'.join(['\t'.join(row_elements) for row_elements in zip(X_train, y_train)])
 		test_str  = '\n'.join(['\t'.join(row_elements) for row_elements in zip(X_test, y_test)])
 		valid_str = '\n'.join(['\t'.join(row_elements) for row_elements in zip(X_valid, y_valid)])
-		
+
 		with open(os.path.join(fold_name_string, 'train.txt'), 'w', encoding='utf-8') as f:
 			f.write(
 				train_str
