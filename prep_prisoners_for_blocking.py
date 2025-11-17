@@ -28,6 +28,11 @@ def stratified_kfold_with_val(X, y, n_splits=10, val_size=0.1):
 
 		yield train_idx, val_idx, test_idx
 
+def serialize_tableAandB(tableA_str, tableB_str, ignore=None):
+	tableA_str = '\r\n'.join([' '.join([f"COL {col} VAL {row[1][col]}" for col in tableA_str.columns]) for row in tqdm(tableA_str.iterrows(), total=len(tableA_str))])
+	tableB_str = '\r\n'.join([' '.join([f"COL {col} VAL {row[1][col]}" for col in tableB_str.columns]) for row in tqdm(tableB_str.iterrows(), total=len(tableB_str))])
+	return tableA_str, tableB_str
+
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser()
 	parser.add_argument("--input", type=str, required=True, default="prisoners_F_M_bodypart_cleaned_new.csv_bc_july.csv_mc.csv")
@@ -48,8 +53,7 @@ if __name__ == "__main__":
 		df = restring_list_col(df, 'label')
 		df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
 		tableA_str, tableB_str, _ = split_df(df, '_right', 'match', verbose=False)
-		tableA_str = '\r\n'.join([' '.join([f"COL {col} VAL {row[1][col]}" for col in tableA_str.columns]) for row in tqdm(tableA_str.iterrows(), total=len(tableA_str))])
-		tableB_str = '\r\n'.join([' '.join([f"COL {col} VAL {row[1][col]}" for col in tableB_str.columns]) for row in tqdm(tableB_str.iterrows(), total=len(tableB_str))])
+		tableA_str, tableB_str = serialize_tableAandB(tableA_str, tableB_str)
 		df = df.drop(columns=['PersonID', 'PersonID_right'])
 		if args.remove_binary:
 			binary_cols = [col for col in df.columns if col.startswith('is_tattoo')]
@@ -65,6 +69,8 @@ if __name__ == "__main__":
 	else:
 		print(f'Reading cached {cache_location}')
 		df = pd.read_csv(cache_location)
+		tableA_str, tableB_str = split_df(df, '_right', None, verbose=False)
+		tableA_str, tableB_str = serialize_tableAandB(tableA_str, tableB_str)
 
 	X = np.array(df['text'].values)
 
@@ -87,18 +93,22 @@ if __name__ == "__main__":
 			f.write(
 				train_str
 			)
+		del train_str
 		with open(os.path.join(fold_name_string, 'train_no_label.txt'), 'w', encoding='utf-8') as f:
 			f.write(
 				train_str_no_label
 			)
+		del train_str_no_label
 		with open(os.path.join(fold_name_string, 'test.txt'), 'w', encoding='utf-8') as f:
 			f.write(
 				test_str
 			)
+		del test_str
 		with open(os.path.join(fold_name_string, 'valid.txt'), 'w', encoding='utf-8') as f:
 			f.write(
 				valid_str
 			)
+		del valid_str
 		with open(os.path.join(fold_name_string, 'tableA.txt'), 'w', encoding='utf-8') as f:
 			f.write(
 				tableA_str
