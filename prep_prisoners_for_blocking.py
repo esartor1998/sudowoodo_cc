@@ -4,7 +4,7 @@ import argparse
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-from serializer import restring_list_col, binarize_string_binary_col, serialize_df_to_df, deserialize_df
+from serializer import restring_list_col, binarize_string_binary_col, serialize_df_to_df, deserialize_df, split_df
 from sklearn.model_selection import StratifiedKFold, StratifiedShuffleSplit
 
 random_state = 42
@@ -47,7 +47,18 @@ if __name__ == "__main__":
 		df = binarize_string_binary_col(df, 'is_tattoo')
 		df = restring_list_col(df, 'label')
 		df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+		tableA_str, tableB_str, _ = split_df(df, '_right', 'match', verbose=False)
+		tableA_str = '\r\n'.join([' '.join([f"COL {col} VAL {row[1][col]}" for col in tableA_str.columns]) for row in tqdm(tableA_str.iterrows(), total=len(tableA_str))])
+		tableB_str = '\r\n'.join([' '.join([f"COL {col} VAL {row[1][col]}" for col in tableB_str.columns]) for row in tqdm(tableB_str.iterrows(), total=len(tableB_str))])
 		df = df.drop(columns=['PersonID', 'PersonID_right'])
+		if args.remove_binary:
+			binary_cols = [col for col in df.columns if col.startswith('is_tattoo')]
+			print(f'Removing binary columns: {binary_cols}')
+			df = df.drop(columns=binary_cols)
+		if args.remove_multi:
+			multi_cols = [col for col in df.columns if col.startswith('label')]
+			print(f'Removing multi-valued columns: {multi_cols}')
+			df = df.drop(columns=multi_cols)
 		df = serialize_df_to_df(df, suffix='_right', label_col='match', include_labels=False)
 		df['label'] = y
 		df.to_csv(cache_location)
@@ -68,9 +79,9 @@ if __name__ == "__main__":
 
 		# (re)serialize to Ditto format
 		train_str_no_label = '\n'.join(X_train)
-		train_str = '\n'.join(['\t'.join(row_elements) for row_elements in zip(X_train, y_train)])
-		test_str  = '\n'.join(['\t'.join(row_elements) for row_elements in zip(X_test, y_test)])
-		valid_str = '\n'.join(['\t'.join(row_elements) for row_elements in zip(X_valid, y_valid)])
+		train_str = '\r\n'.join(['\t'.join(row_elements) for row_elements in zip(X_train, y_train)])
+		test_str  = '\r\n'.join(['\t'.join(row_elements) for row_elements in zip(X_test, y_test)])
+		valid_str = '\r\n'.join(['\t'.join(row_elements) for row_elements in zip(X_valid, y_valid)])
 
 		with open(os.path.join(fold_name_string, 'train.txt'), 'w', encoding='utf-8') as f:
 			f.write(
@@ -87,6 +98,14 @@ if __name__ == "__main__":
 		with open(os.path.join(fold_name_string, 'valid.txt'), 'w', encoding='utf-8') as f:
 			f.write(
 				valid_str
+			)
+		with open(os.path.join(fold_name_string, 'tableA.txt'), 'w', encoding='utf-8') as f:
+			f.write(
+				tableA_str
+			)
+		with open(os.path.join(fold_name_string, 'tableB.txt'), 'w', encoding='utf-8') as f:
+			f.write(
+				tableB_str
 			)
 		#deserialize_df(train_df).to_csv(os.path.join(fold_name_string, 'train.csv'), index=False)
 		#deserialize_df(test_df).to_csv(os.path.join(fold_name_string, 'test.csv'), index=False)

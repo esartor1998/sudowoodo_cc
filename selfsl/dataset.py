@@ -1,15 +1,48 @@
+import os
 import torch
 import random
 
 from torch.utils import data
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoConfig
 
 from .augment import Augmenter
 
-# map lm name to huggingface's pre-trained model names
-lm_mp = {'roberta': 'roberta-base',
-         'bert': 'bert-base-uncased',
-         'distilbert': 'distilbert-base-uncased'}
+from transformers.utils import is_offline_mode
+from transformers.utils.hub import TRANSFORMERS_CACHE
+import os
+import glob
+
+def load_tokenizer_once(model_name):
+    """
+    Pure offline load if files exist in cache.
+    Only download once if absolutely necessary.
+    """
+
+    # 1. Check manually if a tokenizer directory already exists
+    cached_dirs = glob.glob(os.path.join(TRANSFORMERS_CACHE, f"models--{model_name.replace('/', '--')}*", "*"))
+    if cached_dirs:
+        try:
+            return AutoTokenizer.from_pretrained(cached_dirs[0], local_files_only=True)
+        except:
+            pass  # fallback to normal flow below
+
+    # 2. Force Transformers into offline-only mode
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
+    try:
+        # Try offline load (no internet calls)
+        return AutoTokenizer.from_pretrained(model_name, local_files_only=True)
+    except:
+        # 3. Model really not present → temporarily allow download
+        print(f"[INFO] {model_name} not found locally. Downloading once...")
+
+        # Disable offline mode temporarily
+        os.environ["TRANSFORMERS_OFFLINE"] = "0"
+
+        tok = AutoTokenizer.from_pretrained(model_name)
+
+        # After down
+
 
 class DMDataset(data.Dataset):
     """EM dataset"""
@@ -20,7 +53,12 @@ class DMDataset(data.Dataset):
                  size=None,
                  lm='roberta',
                  da=None):
-        self.tokenizer = AutoTokenizer.from_pretrained(lm_mp[lm])
+
+        model_name = lm_mp[lm]
+
+        # Use the safe loader (local first, download once if missing)
+        self.tokenizer = load_tokenizer_once(model_name)
+
         self.pairs = []
         self.labels = []
         self.max_len = max_len
@@ -39,51 +77,35 @@ class DMDataset(data.Dataset):
         else:
             self.augmenter = None
 
-
     def __len__(self):
-        """Return the size of the dataset."""
         return len(self.pairs)
 
     def __getitem__(self, idx):
-        """Return a tokenized item of the dataset.
-
-        Args:
-            idx (int): the index of the item
-
-        Returns:
-            List of int: token ID's of the 1st entity
-            List of int: token ID's of the 2nd entity
-            List of int: token ID's of the two entities combined
-            int: the label of the pair (0: unmatch, 1: match)
-        """
-        # idx = random.randint(0, len(self.pairs)-1)
 
         if len(self.pairs[idx]) == 2:
-            # em
             left = self.pairs[idx][0]
             right = self.pairs[idx][1]
 
-            # augment if da is set
             if self.da is not None:
                 left = self.augmenter.augment_sent(left, self.da)
                 right = self.augmenter.augment_sent(right, self.da)
 
-            # left
             x1 = self.tokenizer.encode(text=left,
                                        max_length=self.max_len,
                                        truncation=True)
-            # right
+
             x2 = self.tokenizer.encode(text=right,
                                        max_length=self.max_len,
                                        truncation=True)
-            # left + right
+
             x12 = self.tokenizer.encode(text=left,
                                         text_pair=right,
                                         max_length=self.max_len,
                                         truncation=True)
+
             return x1, x2, x12, self.labels[idx]
+
         else:
-            # cleaning
             left = self.pairs[idx][0]
             if self.da is not None:
                 left = self.augmenter.augment_sent(left, self.da)
@@ -95,21 +117,7 @@ class DMDataset(data.Dataset):
 
     @staticmethod
     def pad(batch):
-        """Merge a list of dataset items into a train/test batch
-
-        Args:
-            batch (list of tuple): a list of dataset items
-
-        Returns:
-            LongTensor: x1 of shape (batch_size, seq_len)
-            LongTensor: x2 of shape (batch_size, seq_len).
-                        Elements of x1 and x2 are padded to the same length
-            LongTensor: x12 of shape (batch_size, seq_len').
-                        Elements of x12 are padded to the same length
-            LongTensor: a batch of labels, (batch_size,)
-        """
         if len(batch[0]) == 4:
-            # em
             x1, x2, x12, y = zip(*batch)
 
             maxlen = max([len(x) for x in x1+x2])
@@ -124,7 +132,6 @@ class DMDataset(data.Dataset):
                    torch.LongTensor(x12), \
                    torch.LongTensor(y)
         else:
-            # cleaning
             x1, y = zip(*batch)
             maxlen = max([len(x) for x in x1])
             x1 = [xi + [0]*(maxlen - len(xi)) for xi in x1]
