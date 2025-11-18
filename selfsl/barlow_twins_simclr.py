@@ -21,7 +21,7 @@ from sklearn.cluster import KMeans
 from transformers import AutoModel
 from transformers import AdamW, get_linear_schedule_with_warmup
 from torch.utils import data
-from apex import amp
+from torch.cuda.amp import autocast, GradScaler
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
 from .augment import Augmenter
@@ -338,7 +338,7 @@ def create_batches(u_set, batch_size, n_ssl_epochs, num_clusters=50):
                 batch.clear()
 
 
-def selfsl_step(train_nolabel_iter, train_iter, model, optimizer, scheduler, hp):
+def selfsl_step(train_nolabel_iter, train_iter, model, optimizer, scheduler, scaler, hp):
     """Perform a single training step
 
     Args:
@@ -347,6 +347,7 @@ def selfsl_step(train_nolabel_iter, train_iter, model, optimizer, scheduler, hp)
         model (DMModel): the model
         optimizer (Optimizer): the optimizer (Adam or AdamW)
         scheduler (LRScheduler): learning rate scheduler
+        scaler (GradScaler or None): grad scaler for mixed precision
         hp (Namespace): other hyper-parameters (e.g., fp16)
 
     Returns:
@@ -359,23 +360,38 @@ def selfsl_step(train_nolabel_iter, train_iter, model, optimizer, scheduler, hp)
         # loss = model(i%2, yA, yB, [], da=hp.da)
         if hp.ssl_method == 'simclr':
             # simclr
-            loss = model(0, yA, yB, [], da=hp.da, cutoff_ratio=hp.cutoff_ratio)
+            if hp.fp16:
+                with autocast():
+                    loss = model(0, yA, yB, [], da=hp.da, cutoff_ratio=hp.cutoff_ratio)
+            else:
+                loss = model(0, yA, yB, [], da=hp.da, cutoff_ratio=hp.cutoff_ratio)
         elif hp.ssl_method == 'barlow_twins':
             # barlow twins
-            loss = model(1, yA, yB, [], da=hp.da, cutoff_ratio=hp.cutoff_ratio)
+            if hp.fp16:
+                with autocast():
+                    loss = model(1, yA, yB, [], da=hp.da, cutoff_ratio=hp.cutoff_ratio)
+            else:
+                loss = model(1, yA, yB, [], da=hp.da, cutoff_ratio=hp.cutoff_ratio)
         else:
             # combined
             alpha = 1 - hp.alpha_bt
-            loss1 = model(0, yA, yB, [], da=hp.da, cutoff_ratio=hp.cutoff_ratio)
-            loss2 = model(1, yA, yB, [], da=hp.da, cutoff_ratio=hp.cutoff_ratio)
-            loss = alpha * loss1 + (1 - alpha) * loss2
+            if hp.fp16:
+                with autocast():
+                    loss1 = model(0, yA, yB, [], da=hp.da, cutoff_ratio=hp.cutoff_ratio)
+                    loss2 = model(1, yA, yB, [], da=hp.da, cutoff_ratio=hp.cutoff_ratio)
+                    loss = alpha * loss1 + (1 - alpha) * loss2
+            else:
+                loss1 = model(0, yA, yB, [], da=hp.da, cutoff_ratio=hp.cutoff_ratio)
+                loss2 = model(1, yA, yB, [], da=hp.da, cutoff_ratio=hp.cutoff_ratio)
+                loss = alpha * loss1 + (1 - alpha) * loss2
 
         if hp.fp16:
-            with amp.scale_loss(loss, optimizer) as scaled_loss:
-                scaled_loss.backward()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
         else:
             loss.backward()
-        optimizer.step()
+            optimizer.step()
         scheduler.step()
         if i % 10 == 0: # monitoring
             print(f"    step: {i}, loss: {loss.item()}")
@@ -383,14 +399,14 @@ def selfsl_step(train_nolabel_iter, train_iter, model, optimizer, scheduler, hp)
         del loss
 
 
-def fine_tune_step(train_iter, model, optimizer, scheduler, hp):
+def fine_tune_step(train_iter, model, optimizer, scheduler, scaler, hp):
     """Perform a single training step
 
     Args:
         train_iter (Iterator): the train data loader
-        model (DMModel): the model
         optimizer (Optimizer): the optimizer (Adam or AdamW)
         scheduler (LRScheduler): learning rate scheduler
+        scaler (GradScaler or None): grad scaler for mixed precision
         hp (Namespace): other hyper-parameters (e.g., fp16)
 
     Returns:
@@ -402,19 +418,28 @@ def fine_tune_step(train_iter, model, optimizer, scheduler, hp):
         optimizer.zero_grad()
         if len(batch) == 4:
             x1, x2, x12, y = batch
-            prediction = model(2, x1, x2, x12)
+            if hp.fp16:
+                with autocast():
+                    prediction = model(2, x1, x2, x12)
+            else:
+                prediction = model(2, x1, x2, x12)
         else:
             x, y = batch
-            prediction = model(2, x, None, None)
+            if hp.fp16:
+                with autocast():
+                    prediction = model(2, x, None, None)
+            else:
+                prediction = model(2, x, None, None)
 
         loss = criterion(prediction, y.to(model.device))
         # loss = criterion(prediction, y.float().to(model.device))
         if hp.fp16:
-            with amp.scale_loss(loss, optimizer) as scaled_loss:
-                scaled_loss.backward()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
         else:
             loss.backward()
-        optimizer.step()
+            optimizer.step()
         scheduler.step()
         if i % 10 == 0: # monitoring
             print(f"    fine tune step: {i}, loss: {loss.item()}")
@@ -490,7 +515,9 @@ def train(trainset_nolabel, trainset, validset, testset, run_tag, hp):
     optimizer = AdamW(model.parameters(), lr=hp.lr)
     if hp.fp16:
         opt_level = 'O2' if hp.ssl_method == 'combined' else 'O2'
-        model, optimizer = amp.initialize(model, optimizer, opt_level=opt_level)
+        scaler = GradScaler()
+    else:
+        scaler = None
 
     # number of steps
     num_ssl_epochs = hp.n_ssl_epochs
@@ -547,7 +574,7 @@ def train(trainset_nolabel, trainset, validset, testset, run_tag, hp):
         print(f"epoch {epoch}")
         model.train()
         if epoch <= num_ssl_epochs:
-            selfsl_step(train_nolabel_iter, train_iter, model, optimizer, scheduler, hp)
+            selfsl_step(train_nolabel_iter, train_iter, model, optimizer, scheduler, scaler, hp)
             if hp.blocking:
                 recall, new_size = evaluate_blocking(model, hp)
                 # logging
@@ -567,7 +594,7 @@ def train(trainset_nolabel, trainset, validset, testset, run_tag, hp):
                 #     mlflow.log_metric(variable, eval(variable))
                 print(f"epoch {epoch}: recall={recall}, num_candidates={new_size}")
         else:
-            fine_tune_step(train_iter, model, optimizer, scheduler, hp)
+            fine_tune_step(train_iter, model, optimizer, scheduler, scaler, hp)
 
             # eval
             model.eval()
