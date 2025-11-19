@@ -12,6 +12,24 @@ from transformers.utils.hub import TRANSFORMERS_CACHE
 import os
 import glob
 
+import os
+import glob
+import torch
+import random
+from torch.utils import data
+from transformers import AutoTokenizer
+from transformers.utils.hub import TRANSFORMERS_CACHE
+
+from .augment import Augmenter
+
+# map lm name to huggingface's pre-trained model names
+lm_mp = {
+    'roberta': 'roberta-base',
+    'bert': 'bert-base-uncased',
+    'distilbert': 'distilbert-base-uncased'
+}
+
+
 def load_tokenizer_once(model_name):
     """
     Pure offline load if files exist in cache.
@@ -19,29 +37,39 @@ def load_tokenizer_once(model_name):
     """
 
     # 1. Check manually if a tokenizer directory already exists
-    cached_dirs = glob.glob(os.path.join(TRANSFORMERS_CACHE, f"models--{model_name.replace('/', '--')}*", "*"))
+    pattern = os.path.join(
+        TRANSFORMERS_CACHE,
+        "*",
+        f"{model_name}"
+    )
+    cached_dirs = glob.glob(pattern)
+
     if cached_dirs:
         try:
             return AutoTokenizer.from_pretrained(cached_dirs[0], local_files_only=True)
-        except:
-            pass  # fallback to normal flow below
+        except Exception:
+            pass
 
-    # 2. Force Transformers into offline-only mode
+    # 2. Force HF into offline mode
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
     try:
-        # Try offline load (no internet calls)
         return AutoTokenizer.from_pretrained(model_name, local_files_only=True)
-    except:
-        # 3. Model really not present → temporarily allow download
+
+    except Exception:
+        # 3. Model really not in cache → download once
         print(f"[INFO] {model_name} not found locally. Downloading once...")
 
-        # Disable offline mode temporarily
+        # allow download temporarily
         os.environ["TRANSFORMERS_OFFLINE"] = "0"
 
         tok = AutoTokenizer.from_pretrained(model_name)
 
-        # After down
+        # lock HF offline again forever
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
+        return tok
+
 
 
 class DMDataset(data.Dataset):

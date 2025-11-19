@@ -6,61 +6,57 @@ import pickle
 
 from tqdm import tqdm
 
+import torch
 
-def blocked_matmul(mata, matb,
-                   threshold=None,
-                   k=None,
-                   batch_size=512):
-    """Find the most similar pairs of vectors from two matrices (top-k or threshold)
-
-    Args:
-        mata (np.ndarray): the first matrix
-        matb (np.ndarray): the second matrix
-        threshold (float, optional): if set, return all pairs of cosine
-            similarity above the threshold
-        k (int, optional): if set, return for each row in matb the top-k
-            most similar vectors in mata
-        batch_size (int, optional): the batch size of each block
-
-    Returns:
-        list of tuples: the pairs of similar vectors' indices and the similarity
+def blocked_matmul(mata, matb, threshold=None, k=None, batch_size=512):
     """
-    mata = np.array(mata)
-    matb = np.array(matb)
+    MUCH faster GPU version of blocked top-k or threshold similarity search.
+    """
+
+    # Ensure torch tensors on GPU if available
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    mata = torch.as_tensor(np.array(mata), device=device)
+    matb = torch.as_tensor(np.array(matb), device=device)
+
     results = []
-    for start in tqdm(range(0, len(matb), batch_size)):
-        block = matb[start:start+batch_size]
-        sim_mat = np.matmul(mata, block.transpose())
+
+    for start in range(0, len(matb), batch_size):
+        block = matb[start:start+batch_size]  # (B, D)
+
+        # compute similarity (N1, B)
+        sim_mat = mata @ block.T   # GPU matmul
+
+        # --- TOP-K MODE -------------------------------------------------
         if k is not None:
-            indices = np.argpartition(-sim_mat, k, axis=0)
-            for row in indices[:k]:
-                for idx_b, idx_a in enumerate(row):
-                    idx_b += start
-                    results.append((idx_a, idx_b, sim_mat[idx_a][idx_b-start]))
+            # sim_mat: (N1, B)
+            # topk over dim=0 → top k rows for each column = top k matches for each element in block
+            vals, idxs = torch.topk(sim_mat, k=k, dim=0)    # both shapes (k, B)
+
+            # Build result list quickly
+            for j in range(idxs.shape[1]):  # over block items
+                b_index = start + j
+                for i in range(k):
+                    a_index = idxs[i, j].item()
+                    score = vals[i, j].item()
+                    results.append((a_index, b_index, score))
+
+        # --- THRESHOLD MODE --------------------------------------------
         elif threshold is not None:
-            indices = np.argwhere(sim_mat >= threshold)
-            for idx_a, idx_b in indices:
-                idx_b += start
-                results.append((idx_a, idx_b, sim_mat[idx_a][idx_b-start]))
+            mask = sim_mat >= threshold
+            a_idx, b_rel = mask.nonzero(as_tuple=True)
+            for a, b in zip(a_idx.tolist(), b_rel.tolist()):
+                results.append((a, start + b, sim_mat[a, b].item()))
+
     return results
 
-
 def evaluate(model, iterator, threshold=None):
-    """Evaluate a model on a validation/test dataset
+    """Evaluate a model on a validation/test dataset, faster."""
 
-    Args:
-        model (DMModel): the EM model
-        iterator (Iterator): the valid/test dataset iterator
-        threshold (float, optional): the threshold on the 0-class
-
-    Returns:
-        float: the F1 score
-        float (optional): if threshold is not provided, the threshold
-            value that gives the optimal F1
-    """
-    all_p = []
-    all_y = []
     all_probs = []
+    all_y = []
+
+    model.eval()
+
     with torch.no_grad():
         for batch in iterator:
             if model.task_type == 'em':
@@ -70,19 +66,21 @@ def evaluate(model, iterator, threshold=None):
                 x, y = batch
                 logits = model(x)
 
-            # print(probs)
             probs = logits.softmax(dim=1)[:, 1]
 
-            # print(logits)
-            # pred = logits.argmax(dim=1)
-            all_probs += probs.cpu().numpy().tolist()
-            # all_p += pred.cpu().numpy().tolist()
-            all_y += y.cpu().numpy().tolist()
+            # accumulate as torch tensors (faster)
+            all_probs.append(probs.cpu())
+            all_y.append(y.cpu())
 
+    # concatenate once (much faster)
+    all_probs = torch.cat(all_probs).numpy()
+    all_y = torch.cat(all_y).numpy()
+
+    # ---------- FIXED THRESHOLD MODE ----------
     if threshold is not None:
-        pred = [1 if p > threshold else 0 for p in all_probs]
+        pred = (all_probs > threshold).astype(int)
 
-        # dump the results
+        # dump results (same as before)
         pickle.dump(pred, open('test_results.pkl', 'wb'))
         mlflow.log_artifact('test_results.pkl')
 
@@ -90,19 +88,22 @@ def evaluate(model, iterator, threshold=None):
         p = metrics.precision_score(all_y, pred)
         r = metrics.recall_score(all_y, pred)
         return f1, p, r
-    else:
-        best_th = 0.5
-        p = r = f1 = 0.0 # metrics.f1_score(all_y, all_p)
 
-        for th in np.arange(0.0, 1.0, 0.05):
-            pred = [1 if p > th else 0 for p in all_probs]
-            new_f1 = metrics.f1_score(all_y, pred)
-            new_p = metrics.precision_score(all_y, pred)
-            new_r = metrics.recall_score(all_y, pred)
-            if new_f1 > f1:
-                f1 = new_f1
-                p = new_p
-                r = new_r
-                best_th = th
+    # ---------- SEARCH BEST THRESHOLD ----------
+    best_f1 = -1
+    best_th = 0.5
+    best_p = 0.0
+    best_r = 0.0
 
-        return f1, p, r, best_th
+    # vectorized threshold loop (fast)
+    for th in np.arange(0.0, 1.0, 0.05):
+        pred = (all_probs > th).astype(int)
+
+        f1 = metrics.f1_score(all_y, pred)
+        if f1 > best_f1:
+            best_f1 = f1
+            best_p = metrics.precision_score(all_y, pred)
+            best_r = metrics.recall_score(all_y, pred)
+            best_th = th
+
+    return best_f1, best_p, best_r, best_th
