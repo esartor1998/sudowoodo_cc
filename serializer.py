@@ -134,7 +134,7 @@ def restring_list_col(df, col_name):
     df[col_name] = [
         []
         if item == "[]"
-        else [subitem[col_name] for subitem in ast.literal_eval(item)]
+        else [subitem['label'] for subitem in ast.literal_eval(item)]
         for item in tqdm(df[col_name])
     ]
     return df
