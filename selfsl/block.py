@@ -87,40 +87,40 @@ def read_ground_truth(path):
                 res.append((lid, rid))
             total += 1
     return res, total
-    
-    def evaluate_pairs(pairs, ground_truth, k=None):
-        """Compute recall more efficiently."""
-    
-        # Ground truth to a set once
-        gt_set = set(ground_truth)
-    
-        if k:
-            # group by r using fast containers
-            r_index = defaultdict(list)
-            for l, r, score in pairs:
-                r_index[r].append((score, l))
-    
-            # keep the top-k per r
-            selected = set()
-            for r, vals in r_index.items():
-                # nlargest is faster than sort+slice
-                top_vals = heapq.nlargest(k, vals)   # returns top k by first item (score)
-                for score, l in top_vals:
-                    selected.add((l, r))
-    
-            # Fast recall computation
-            y_true = 1
-            tp = sum(1 for p in gt_set if p in selected)
-            recall = tp / len(gt_set)
-            return recall, len(selected)
-    
-        else:
-            # non-k mode: simple set conversion once
-            selected = {(l, r) for l, r, _ in pairs}
-    
-            tp = sum(1 for p in gt_set if p in selected)
-            recall = tp / len(gt_set)
-            return recall
+
+def evaluate_pairs(pairs, ground_truth, k=None):
+    """Compute recall more efficiently."""
+
+    # Ground truth to a set once
+    gt_set = set(ground_truth)
+
+    if k:
+        # group by r using fast containers
+        r_index = defaultdict(list)
+        for l, r, score in pairs:
+            r_index[r].append((score, l))
+
+        # keep the top-k per r
+        selected = set()
+        for r, vals in r_index.items():
+            # nlargest is faster than sort+slice
+            top_vals = heapq.nlargest(k, vals)   # returns top k by first item (score)
+            for score, l in top_vals:
+                selected.add((l, r))
+
+        # Fast recall computation
+        y_true = 1
+        tp = sum(1 for p in gt_set if p in selected)
+        recall = tp / len(gt_set)
+        return recall, len(selected)
+
+    else:
+        # non-k mode: simple set conversion once
+        selected = {(l, r) for l, r, _ in pairs}
+
+        tp = sum(1 for p in gt_set if p in selected)
+        recall = tp / len(gt_set)
+        return recall
 
 
 def evaluate_blocking(model, hp):
