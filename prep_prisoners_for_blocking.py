@@ -35,10 +35,11 @@ def serialize_tableAandB(tableA_str, tableB_str, ignore=None):
 
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser()
-	parser.add_argument("--input", type=str, required=True, default="prisoners_F_M_bodypart_cleaned_new.csv_bc_july.csv_mc.csv")
-	parser.add_argument("--remove-binary", action='store_true', help="Remove binary columns indicating presence of tattoos.")
-	parser.add_argument("--remove-multi", action='store_true', help="Remove multi-valued columns indicating tattoo descriptions.")
+	parser.add_argument("--input", type=str, required=True)
+	parser.add_argument("--remove-binary", action='store_true')
+	parser.add_argument("--remove-multi", action='store_true')
 	parser.add_argument("--output-folder", type=str, default="data/em/prisoner_pairs")
+	parser.add_argument("--label-col", type=str, default="match")
 	args = parser.parse_args()
 
 	os.makedirs(args.output_folder, exist_ok=True)
@@ -46,15 +47,21 @@ if __name__ == "__main__":
 	n_splits = 10
 
 	df = pd.read_csv(args.input)
+	# Keep original IDs before serialization / dropping columns
 	y = np.array([str(int(item)) for item in df['PersonID'] == df['PersonID_right']])
 	if not os.path.isfile(cache_location):
+		df = df.drop(columns=['PersonID', 'PersonID_right'])
 		print(f'Generating and cacheing the serialized version of the pairs file {args.input}...')
 		df = binarize_string_binary_col(df, 'is_tattoo')
-		df = restring_list_col(df, 'label')
+		print(df.columns)
+		try:
+			df = restring_list_col(df, 'label')
+			df = restring_list_col(df, 'label_right')
+		except Exception as e:
+			print(f'Could not re-stringify list columns: {e}')
 		df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
-		tableA_str, tableB_str, _ = split_df(df, '_right', 'match', verbose=False)
+		tableA_str, tableB_str, _ = split_df(df, '_right', args.label_col, verbose=False)
 		tableA_str, tableB_str = serialize_tableAandB(tableA_str, tableB_str)
-		df = df.drop(columns=['PersonID', 'PersonID_right'])
 		if args.remove_binary:
 			binary_cols = [col for col in df.columns if col.startswith('is_tattoo')]
 			print(f'Removing binary columns: {binary_cols}')
@@ -63,15 +70,16 @@ if __name__ == "__main__":
 			multi_cols = [col for col in df.columns if col.startswith('label')]
 			print(f'Removing multi-valued columns: {multi_cols}')
 			df = df.drop(columns=multi_cols)
-		df = serialize_df_to_df(df, suffix='_right', label_col='match', include_labels=False)
+		df = serialize_df_to_df(df, suffix='_right', label_col=args.label_col, include_labels=False)
 		df['label'] = y
 		df.to_csv(cache_location)
 	else:
 		print(f'Reading cached {cache_location}')
 		df = pd.read_csv(cache_location)
-		tableA_str, tableB_str = split_df(df, '_right', None, verbose=False)
+		tableA_str, tableB_str = split_df(df, '_right', args.label_col, verbose=False)
 		tableA_str, tableB_str = serialize_tableAandB(tableA_str, tableB_str)
 
+	#this is just X
 	X = np.array(df['text'].values)
 
 	for fold, (train_idx, val_idx, test_idx) in tqdm(enumerate(stratified_kfold_with_val(X, y, n_splits=n_splits)), total=n_splits, desc="Processing folds..."):
@@ -117,6 +125,26 @@ if __name__ == "__main__":
 			f.write(
 				tableB_str
 			)
+			
+		train_ids_df = pd.DataFrame({
+			"ltable_id": train_idx,
+			"rtable_id": train_idx,
+			"label": y[train_idx]
+		})
+		valid_ids_df = pd.DataFrame({
+			"ltable_id": val_idx,
+			"rtable_id": val_idx,
+			"label": y[val_idx]
+		})
+		test_ids_df = pd.DataFrame({
+			"ltable_id": test_idx,
+			"rtable_id": test_idx,
+			"label": y[test_idx]
+		}) #because our pairs are premade, this is trivial; lindex and rindex are going to be = in tableA and tableB
+		
+		train_ids_df.to_csv(os.path.join(fold_name_string, "train.csv"), index=False)
+		valid_ids_df.to_csv(os.path.join(fold_name_string, "valid.csv"), index=False)
+		test_ids_df.to_csv(os.path.join(fold_name_string, "test.csv"), index=False)
 		#deserialize_df(train_df).to_csv(os.path.join(fold_name_string, 'train.csv'), index=False)
 		#deserialize_df(test_df).to_csv(os.path.join(fold_name_string, 'test.csv'), index=False)
 		#deserialize_df(valid_df).to_csv(os.path.join(fold_name_string, 'valid.csv'), index=False)
