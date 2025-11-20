@@ -132,6 +132,25 @@ def restring_list_col(df, col_name):
     print("Re-stringifying the list columns...")
     print(df)
     df[col_name] = [
+        "[]"
+        if item == []
+        else ', '.join([subitem['label'] for subitem in ast.literal_eval(item)])
+        for item in tqdm(df[col_name])
+    ]
+    return df
+
+def restring_lists(column):
+	return [
+        "[]"
+        if item == []
+        else str([subitem['label'] for subitem in ast.literal_eval(item)])
+        for item in tqdm(column)
+    ]
+
+def destring_list_col(df, col_name):
+    print("De-stringifying the list columns...")
+    print(df)
+    df[col_name] = [
         []
         if item == "[]"
         else [subitem['label'] for subitem in ast.literal_eval(item)]

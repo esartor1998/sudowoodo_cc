@@ -40,6 +40,7 @@ if __name__ == "__main__":
 	parser.add_argument("--remove-multi", action='store_true')
 	parser.add_argument("--output-folder", type=str, default="data/em/prisoner_pairs")
 	parser.add_argument("--label-col", type=str, default="match")
+	parser.add_argument("--id_col", type=str, default="PersonID")
 	args = parser.parse_args()
 
 	os.makedirs(args.output_folder, exist_ok=True)
@@ -48,9 +49,9 @@ if __name__ == "__main__":
 
 	df = pd.read_csv(args.input)
 	# Keep original IDs before serialization / dropping columns
-	y = np.array([str(int(item)) for item in df['PersonID'] == df['PersonID_right']])
+	y = np.array([str(int(item)) for item in df[f'{args.id_col}'] == df[f'{args.id_col}_right']])
 	if not os.path.isfile(cache_location):
-		df = df.drop(columns=['PersonID', 'PersonID_right'])
+		df = df.drop(columns=[f'{args.id_col}', f'{args.id_col}_right'])
 		print(f'Generating and cacheing the serialized version of the pairs file {args.input}...')
 		df = binarize_string_binary_col(df, 'is_tattoo')
 		print(df.columns)

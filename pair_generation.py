@@ -22,10 +22,10 @@ args = parser.parse_args()
 #TODO: add other options, specifying the colnames to target for joining and for match identification etc
 
 df = pd.read_csv(args.target)
+df['label'] = restring_lists(df['label'])
 df = df.astype(str)
 df = df.fillna("")
 df = df.astype(str)
-df['label'] = restring_lists(df['label'])
 df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
 print(df.dtypes)
 print(df)
