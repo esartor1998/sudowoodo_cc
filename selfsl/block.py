@@ -2,6 +2,7 @@ import os
 import numpy as np
 import random
 import torch
+import heapq
 import csv
 
 from .bt_dataset import BTDataset
@@ -37,9 +38,6 @@ def encode_all(dataset, model, hp):
     res = np.array(all_encs)
     res = [v / np.linalg.norm(v) for v in res]
     return res
-
-
-
 
 def run_blocking(left_dataset, right_dataset, model, hp):
     """Run the Barlow Twins blocking method.
@@ -109,7 +107,6 @@ def evaluate_pairs(pairs, ground_truth, k=None):
                 selected.add((l, r))
 
         # Fast recall computation
-        y_true = 1
         tp = sum(1 for p in gt_set if p in selected)
         recall = tp / len(gt_set)
         return recall, len(selected)
