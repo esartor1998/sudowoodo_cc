@@ -104,7 +104,9 @@ if __name__ == '__main__':
     # dump
     import pickle
     from pathlib import Path
-    out_path = Path(path) / "blocking_result.pkl"
+    if hp.tfidf:
+        out_path = Path(path) / "tfidf_blocking_result.pkl"
+    else:
+        out_path = Path(path) / "blocking_result.pkl"
     with open(out_path, "wb") as f:
         pickle.dump(pairs, f)
-
