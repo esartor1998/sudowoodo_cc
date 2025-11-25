@@ -41,17 +41,19 @@ if __name__ == "__main__":
 	parser.add_argument("--output-folder", type=str, default="data/em/prisoner_pairs")
 	parser.add_argument("--label-col", type=str, default="match")
 	parser.add_argument("--id_col", type=str, default="PersonID")
+	parser.add_argument("--target-tfidf", action='store_true')
 	args = parser.parse_args()
 
-	os.makedirs(args.output_folder, exist_ok=True)
-	cache_location = f'{args.input}_serialized_removebin={args.remove_binary}_removemulti={args.remove_multi}_cached.csv'
+	cache_location = f'~/scratch/{args.input}_serialized_removebin={args.remove_binary}_removemulti={args.remove_multi}_targettfidf={args.target_tfidf}_cached.csv'
 	n_splits = 10
-
+	if args.target_tfidf:
+		args.output_folder = f'{args.output_folder}_tfidf'
+	os.makedirs(args.output_folder, exist_ok=True)
+	
 	df = pd.read_csv(args.input)
 	# Keep original IDs before serialization / dropping columns
 	y = np.array([str(int(item)) for item in df[f'{args.id_col}'] == df[f'{args.id_col}_right']])
 	if not os.path.isfile(cache_location):
-		df = df.drop(columns=[f'{args.id_col}', f'{args.id_col}_right'])
 		print(f'Generating and cacheing the serialized version of the pairs file {args.input}...')
 		df = binarize_string_binary_col(df, 'is_tattoo')
 		print(df.columns)
@@ -61,8 +63,11 @@ if __name__ == "__main__":
 		except Exception as e:
 			print(f'Could not re-stringify list columns: {e}')
 		df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
-		tableA_str, tableB_str, _ = split_df(df, '_right', args.label_col, verbose=False)
-		tableA_str, tableB_str = serialize_tableAandB(tableA_str, tableB_str)
+		if args.target_tfidf:
+			df = df.loc[:, df.columns.intersection([args.id_col, f'{args.id_col}_right', 'FirstName', 'LastName', 'sex', 'is_tattoo', 'label', 'FirstName_right', 'LastName_right', 'sex_right', 'is_tattoo_right', 'label_right', args.label_col])].astype(str)
+			for col in df.columns:
+				if df[col].dtype == 'object' or df[col].dtype == 'str':
+					df[col] = df[col].str.lower()
 		if args.remove_binary:
 			binary_cols = [col for col in df.columns if col.startswith('is_tattoo')]
 			print(f'Removing binary columns: {binary_cols}')
@@ -71,9 +76,18 @@ if __name__ == "__main__":
 			multi_cols = [col for col in df.columns if col.startswith('label')]
 			print(f'Removing multi-valued columns: {multi_cols}')
 			df = df.drop(columns=multi_cols)
+		tableA_csv, tableB_csv, _ = split_df(df, '_right', args.label_col, verbose=False)
+		tableA_csv.to_csv(os.path.join(args.output_folder, 'tableA.csv'), index=False)
+		tableB_csv.to_csv(os.path.join(args.output_folder, 'tableB.csv'), index=False)
+		tableA_csv = tableA_csv.drop(columns=[f'{args.id_col}'])
+		tableB_csv = tableB_csv.drop(columns=[f'{args.id_col}_right'])
+		df = df.drop(columns=[f'{args.id_col}', f'{args.id_col}_right'])
+		tableA_str, tableB_str = serialize_tableAandB(tableA_csv, tableB_csv)
 		df = serialize_df_to_df(df, suffix='_right', label_col=args.label_col, include_labels=False)
 		df['label'] = y
 		df.to_csv(cache_location)
+		print(df.columns)
+		print(df)
 	else:
 		print(f'Reading cached {cache_location}')
 		df = pd.read_csv(cache_location)
@@ -146,6 +160,8 @@ if __name__ == "__main__":
 		train_ids_df.to_csv(os.path.join(fold_name_string, "train.csv"), index=False)
 		valid_ids_df.to_csv(os.path.join(fold_name_string, "valid.csv"), index=False)
 		test_ids_df.to_csv(os.path.join(fold_name_string, "test.csv"), index=False)
+		tableA_csv.to_csv(os.path.join(fold_name_string, 'tableA.csv'), index=False)
+		tableB_csv.to_csv(os.path.join(fold_name_string, 'tableB.csv'), index=False)
 		#deserialize_df(train_df).to_csv(os.path.join(fold_name_string, 'train.csv'), index=False)
 		#deserialize_df(test_df).to_csv(os.path.join(fold_name_string, 'test.csv'), index=False)
 		#deserialize_df(valid_df).to_csv(os.path.join(fold_name_string, 'valid.csv'), index=False)
